@@ -16,7 +16,10 @@
 
 package org.springframework.cloud.stream.app.gpfdist.sink;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.time.Duration;
+import java.util.function.Function;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -28,6 +31,7 @@ import org.reactivestreams.Processor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.WorkQueueProcessor;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import reactor.ipc.netty.NettyState;
 import reactor.ipc.netty.http.server.HttpServer;
 import reactor.ipc.netty.options.ServerOptions;
@@ -43,6 +47,7 @@ public class GpfdistServer {
 	private final static Log log = LogFactory.getLog(GpfdistServer.class);
 
 	private final Processor<ByteBuf, ByteBuf> processor;
+	private WorkQueueProcessor<ByteBuf> workProcessor;
 	private final int port;
 	private final int flushCount;
 	private final int flushTime;
@@ -90,9 +95,13 @@ public class GpfdistServer {
 	 * @throws Exception the exception
 	 */
 	public synchronized void stop() throws Exception {
+		if (workProcessor != null) {
+			workProcessor.onComplete();
+		}
 		if (server != null) {
 			server.dispose();
 		}
+		workProcessor = null;
 		server = null;
 	}
 
@@ -108,16 +117,18 @@ public class GpfdistServer {
 
 	private NettyState createProtocolListener()
 			throws Exception {
-		WorkQueueProcessor<ByteBuf> workProcessor = WorkQueueProcessor.create("gpfdist-sink-worker", 8192, false);
+		workProcessor = WorkQueueProcessor.create("gpfdist-sink-worker", 8192, false);
 		Flux<ByteBuf> stream = Flux.from(processor)
 				.window(flushCount, Duration.ofSeconds(flushTime))
 				.flatMap(s -> s.reduceWith(Unpooled::buffer, ByteBuf::writeBytes))
 				.subscribeWith(workProcessor);
 
-		NettyState httpServer = HttpServer.create(ServerOptions.on("0.0.0.0", port).eventLoopGroup(new NioEventLoopGroup(10)))
+
+		NettyState httpServer = HttpServer
+				.create(ServerOptions.on("0.0.0.0", port)
+						.eventLoopGroup(new NioEventLoopGroup(10)))
 				.newRouter(r -> r.get("/data", (request, response) -> {
 					response.chunkedTransfer(false);
-
 					return response
 							.addHeader("Content-type", "text/plain")
 							.addHeader("Expires", "0")
@@ -125,16 +136,38 @@ public class GpfdistServer {
 							.addHeader("X-GP-PROTO", "1")
 							.addHeader("Cache-Control", "no-cache")
 							.addHeader("Connection", "close")
-							.flushEach()
 							.send(stream
 									.take(batchCount)
 									.timeout(Duration.ofSeconds(batchTimeout), Flux.<ByteBuf> empty())
 									.concatWith(Flux.just(Unpooled.copiedBuffer(new byte[0])))
-									.map(new GpfdistCodec(request.channel().alloc())));
+									.map(new GpfdistCodecFunction(request.channel().alloc()))
+								.doAfterTerminate(()->{response.channel().close();}));
 				})).block();
 
 		log.info("Server running using address=[" + httpServer.address() + "]");
 		localPort = httpServer.address().getPort();
 		return httpServer;
+	}
+
+
+	private static class GpfdistCodecFunction implements Function<ByteBuf, ByteBuf> {
+
+		final byte[] h1 = Character.toString('D').getBytes(Charset.forName("UTF-8"));
+		final ByteBufAllocator alloc;
+
+		public GpfdistCodecFunction(ByteBufAllocator alloc) {
+			this.alloc = alloc;
+		}
+
+		@Override
+		public ByteBuf apply(ByteBuf t) {
+			return alloc
+					.buffer()
+					.writeBytes(h1)
+					.writeBytes(ByteBuffer
+							.allocate(4)
+							.putInt(t.readableBytes()).array())
+					.writeBytes(t);
+		}
 	}
 }
