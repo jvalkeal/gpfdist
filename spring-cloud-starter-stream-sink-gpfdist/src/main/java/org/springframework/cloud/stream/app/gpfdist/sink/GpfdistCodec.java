@@ -16,33 +16,38 @@
 
 package org.springframework.cloud.stream.app.gpfdist.sink;
 
-import reactor.fn.Consumer;
-import reactor.fn.Function;
-import reactor.io.buffer.Buffer;
-import reactor.io.codec.Codec;
-
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.util.function.Function;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 
 /**
- * Gpfdist related reactor {@link Codec}.
+ * Gpfdist related function.
  *
  * @author Janne Valkealahti
  */
-public class GpfdistCodec extends Codec<Buffer, Buffer, Buffer> {
+public class GpfdistCodec implements Function<ByteBuf, ByteBuf> {
 
 	final byte[] h1 = Character.toString('D').getBytes(Charset.forName("UTF-8"));
 
-	@SuppressWarnings("resource")
-	@Override
-	public Buffer apply(Buffer t) {
-			byte[] h2 = ByteBuffer.allocate(4).putInt(t.flip().remaining()).array();
-			return new Buffer().append(h1).append(h2).append(t).flip();
+	final ByteBufAllocator alloc;
+
+	public GpfdistCodec(ByteBufAllocator alloc) {
+		this.alloc = alloc;
 	}
 
 	@Override
-	public Function<Buffer, Buffer> decoder(Consumer<Buffer> next) {
-		return null;
+	public ByteBuf apply(ByteBuf t) {
+		int size = t.capacity();
+		byte[] h2 = ByteBuffer.allocate(4)
+							.putInt(size)
+							.array();
+		return alloc.buffer()
+					.writeBytes(h1)
+					.writeBytes(h2)
+					.writeBytes(t);
 	}
 
 }

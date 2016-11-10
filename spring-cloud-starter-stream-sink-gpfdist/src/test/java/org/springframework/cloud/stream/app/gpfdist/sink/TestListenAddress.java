@@ -16,41 +16,30 @@
 
 package org.springframework.cloud.stream.app.gpfdist.sink;
 
-import org.junit.Test;
-import reactor.Environment;
-import reactor.fn.Function;
-import reactor.io.buffer.Buffer;
-import reactor.io.net.NetStreams;
-import reactor.io.net.Spec.HttpServerSpec;
-import reactor.io.net.http.HttpServer;
-
-import java.net.InetSocketAddress;
-
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.Assert.assertThat;
+
+import java.net.InetSocketAddress;
+
+import org.junit.Test;
+
+import reactor.ipc.netty.NettyState;
+import reactor.ipc.netty.http.server.HttpServer;
 
 public class TestListenAddress {
 
 	@Test
 	public void testBindZero() throws Exception {
-		Environment.initializeIfEmpty().assignErrorJournal();
-
-		HttpServer<Buffer, Buffer> httpServer = NetStreams
-				.httpServer(new Function<HttpServerSpec<Buffer, Buffer>, HttpServerSpec<Buffer, Buffer>>() {
-
-					@Override
-					public HttpServerSpec<Buffer, Buffer> apply(HttpServerSpec<Buffer, Buffer> server) {
-						return server
-								.codec(new GpfdistCodec())
-								.listen(0);
-					}
-				});
-		httpServer.start().awaitSuccess();
-		InetSocketAddress address = httpServer.getListenAddress();
+		NettyState httpServer = HttpServer
+				.create()
+				.newRouter(r -> r.get("/data", (request, response) -> {
+			return response.send(null);
+		})).block();
+		InetSocketAddress address = httpServer.address();
 		assertThat(address, notNullValue());
 		assertThat(address.getPort(), not(0));
-		httpServer.shutdown();
+		httpServer.dispose();
 	}
 
 }
