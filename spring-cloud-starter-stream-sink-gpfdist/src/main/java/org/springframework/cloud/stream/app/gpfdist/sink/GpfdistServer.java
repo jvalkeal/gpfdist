@@ -149,7 +149,6 @@ public class GpfdistServer {
 		return httpServer;
 	}
 
-
 	private static class GpfdistCodecFunction implements Function<ByteBuf, ByteBuf> {
 
 		final byte[] h1 = Character.toString('D').getBytes(Charset.forName("UTF-8"));
