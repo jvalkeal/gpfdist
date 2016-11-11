@@ -27,6 +27,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.reactivestreams.Processor;
+import org.springframework.util.Assert;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.WorkQueueProcessor;
@@ -68,6 +69,7 @@ public class GpfdistServer {
 	 */
 	public GpfdistServer(Processor<ByteBuf, ByteBuf> processor, int port, int flushCount, int flushTime,
 			int batchTimeout, int batchCount) {
+		Assert.notNull(processor, "Processor must be set");
 		this.processor = processor;
 		this.port = port;
 		this.flushCount = flushCount;
@@ -83,6 +85,7 @@ public class GpfdistServer {
 	 * @throws Exception the exception
 	 */
 	public synchronized NettyState start() throws Exception {
+		workProcessor = WorkQueueProcessor.create("gpfdist-sink-worker", 8192, false);
 		if (server == null) {
 			server = createProtocolListener();
 		}
@@ -99,7 +102,8 @@ public class GpfdistServer {
 			workProcessor.onComplete();
 		}
 		if (server != null) {
-			server.dispose();
+			// dispose hungs due to bug in reactor
+			//server.dispose();
 		}
 		workProcessor = null;
 		server = null;
@@ -117,13 +121,24 @@ public class GpfdistServer {
 
 	private NettyState createProtocolListener()
 			throws Exception {
-		workProcessor = WorkQueueProcessor.create("gpfdist-sink-worker", 8192, false);
+		// Create a Flux from a processor which contains incoming data.
+		// Microbatch data as windows and flush it into downstream with timeout
+		// or when window gets full.
+		// Combine windowed data into one ByteBuf which will eventually end
+		// up into netty pipeline.
+		// workProcessor allows any number of netty channels to come and go
+		// to spread a load.
 		Flux<ByteBuf> stream = Flux.from(processor)
 				.window(flushCount, Duration.ofSeconds(flushTime))
 				.flatMap(s -> s.reduceWith(Unpooled::buffer, ByteBuf::writeBytes))
 				.subscribeWith(workProcessor);
 
-
+		// Every new gpfdist client connection will have its own channel
+		// and subscription to upstream.
+		// Data is streamed over this channel until we have taken enough
+		// batches or we have a timeout for not enough data from upstream.
+		// We process raw data into a format needed for gpfdist and send
+		// end of data message.
 		NettyState httpServer = HttpServer
 				.create(ServerOptions.on("0.0.0.0", port)
 						.eventLoopGroup(new NioEventLoopGroup(10)))
@@ -149,6 +164,34 @@ public class GpfdistServer {
 		return httpServer;
 	}
 
+	/**
+	 * Function which takes a given ByteBuf having a raw data to be sent
+	 * into a pipeline consumed by gpfdist nodes.
+	 *
+	 * Gpfdist protocol has a special format it understand and we're
+	 * only using part of it to send a data. In a nutshell first 5 bytes
+	 * are reserved where first is 'D' indicating we're sending data and
+	 * next 4 bytes tells how many bytes are expected.
+	 *
+	 * For example here we have data "1\n".
+	 *
+	 *          +-------------------------------------------------+
+	 *         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+	 *+--------+-------------------------------------------------+----------------+
+	 *|00000000| 44 00 00 00 02 31 0a                            |D....1.         |
+	 *+--------+-------------------------------------------------+----------------+
+	 *
+	 * When connection is open from a gpfdist node, there has to be special
+	 * end of transmission message which is same as above but we just tell
+	 * that we're sending zero bytes.
+	 *
+	 *         +-------------------------------------------------+
+	 *         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+	 *+--------+-------------------------------------------------+----------------+
+	 *|00000000| 44 00 00 00 00                                  |D....           |
+	 *+--------+-------------------------------------------------+----------------+
+	 *
+	 */
 	private static class GpfdistCodecFunction implements Function<ByteBuf, ByteBuf> {
 
 		final byte[] h1 = Character.toString('D').getBytes(Charset.forName("UTF-8"));

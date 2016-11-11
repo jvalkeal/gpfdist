@@ -16,8 +16,8 @@ public class FooTests {
 		server.start();
 
 		for (int i = 0; i < 100; i++) {
-			String d = Integer.toString(i);
-			System.out.println("Sending " + d);
+			String d = Integer.toString(i) + "\n";
+			System.out.println("Sending " + i);
 			processor.onNext(Unpooled.copiedBuffer(d.getBytes()));
 		}
 		Thread.sleep(20000);
