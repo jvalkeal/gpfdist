@@ -12,7 +12,7 @@ public class FooTests {
 	@Test
 	public void testFoo() throws Exception {
 		Processor<ByteBuf, ByteBuf> processor = WorkQueueProcessor.create(false);
-		GpfdistServer server = new GpfdistServer(processor, 8080, 1, 1, 1, 10);
+		GpfdistServer server = new GpfdistServer(processor, 8080, 5, 1, 1, 10);
 		server.start();
 
 		for (int i = 0; i < 100; i++) {
