@@ -21,21 +21,19 @@ import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.function.Function;
 
-import io.netty.buffer.Unpooled;
-import io.netty.channel.nio.NioEventLoopGroup;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.reactivestreams.Processor;
 import org.springframework.util.Assert;
 
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.WorkQueueProcessor;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
-import reactor.ipc.netty.NettyState;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.nio.NioEventLoopGroup;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.WorkQueueProcessor;
+import reactor.ipc.netty.NettyContext;
 import reactor.ipc.netty.http.server.HttpServer;
-import reactor.ipc.netty.options.ServerOptions;
 
 /**
  * Server implementation around reactor and netty providing endpoint
@@ -54,7 +52,7 @@ public class GpfdistServer {
 	private final int flushTime;
 	private final int batchTimeout;
 	private final int batchCount;
-	private NettyState server;
+	private NettyContext server;
 	private int localPort = -1;
 
 	/**
@@ -84,7 +82,7 @@ public class GpfdistServer {
 	 * @return the http server
 	 * @throws Exception the exception
 	 */
-	public synchronized NettyState start() throws Exception {
+	public synchronized NettyContext start() throws Exception {
 		workProcessor = WorkQueueProcessor.create("gpfdist-sink-worker", 8192, false);
 		if (server == null) {
 			server = createProtocolListener();
@@ -102,8 +100,7 @@ public class GpfdistServer {
 			workProcessor.onComplete();
 		}
 		if (server != null) {
-			// dispose hungs due to bug in reactor
-			//server.dispose();
+			server.dispose();
 		}
 		workProcessor = null;
 		server = null;
@@ -119,7 +116,7 @@ public class GpfdistServer {
 	}
 
 
-	private NettyState createProtocolListener()
+	private NettyContext createProtocolListener()
 			throws Exception {
 		// Create a Flux from a processor which contains incoming data.
 		// Microbatch data as windows and flush it into downstream with timeout
@@ -139,8 +136,8 @@ public class GpfdistServer {
 		// batches or we have a timeout for not enough data from upstream.
 		// We process raw data into a format needed for gpfdist and send
 		// end of data message.
-		NettyState httpServer = HttpServer
-				.create(ServerOptions.on("0.0.0.0", port)
+		NettyContext httpServer = HttpServer
+				.create(opts -> opts.listen("0.0.0.0", port)
 						.eventLoopGroup(new NioEventLoopGroup(10)))
 				.newRouter(r -> r.get("/data", (request, response) -> {
 					response.chunkedTransfer(false);
@@ -155,8 +152,8 @@ public class GpfdistServer {
 									.take(batchCount)
 									.timeout(Duration.ofSeconds(batchTimeout), Flux.<ByteBuf> empty())
 									.concatWith(Flux.just(Unpooled.copiedBuffer(new byte[0])))
-									.map(new GpfdistCodecFunction(request.channel().alloc()))
-								.doAfterTerminate(()->{response.channel().close();}));
+									.map(new GpfdistCodecFunction(response.alloc())).log("XXX")
+									);
 				})).block();
 
 		log.info("Server running using address=[" + httpServer.address() + "]");

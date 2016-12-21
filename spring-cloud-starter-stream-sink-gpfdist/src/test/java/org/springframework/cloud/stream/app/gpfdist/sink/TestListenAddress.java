@@ -24,14 +24,14 @@ import java.net.InetSocketAddress;
 
 import org.junit.Test;
 
-import reactor.ipc.netty.NettyState;
+import reactor.ipc.netty.NettyContext;
 import reactor.ipc.netty.http.server.HttpServer;
 
 public class TestListenAddress {
 
 	@Test
 	public void testBindZero() throws Exception {
-		NettyState httpServer = HttpServer
+		NettyContext httpServer = HttpServer
 				.create()
 				.newRouter(r -> r.get("/data", (request, response) -> {
 			return response.send(null);

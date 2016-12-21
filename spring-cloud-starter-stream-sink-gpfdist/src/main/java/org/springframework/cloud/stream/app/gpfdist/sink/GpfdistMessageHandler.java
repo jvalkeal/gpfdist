@@ -126,6 +126,8 @@ public class GpfdistMessageHandler extends AbstractGpfdistMessageHandler {
 	protected void doStart() {
 		try {
 			log.info("Creating gpfdist protocol listener on port=" + port);
+			log.info("Creating GpfdistServer flushCount=" + flushCount + ", flushTime=" + flushTime + ", batchTimeout=" + batchTimeout
+					+ ", batchCount=" + batchCount);
 			gpfdistServer = new GpfdistServer(processor, port, flushCount, flushTime, batchTimeout, batchCount);
 			gpfdistServer.start();
 			log.info("gpfdist protocol listener running on port=" + gpfdistServer.getLocalPort());
