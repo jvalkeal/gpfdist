@@ -152,7 +152,7 @@ public class GpfdistServer {
 									.take(batchCount)
 									.timeout(Duration.ofSeconds(batchTimeout), Flux.<ByteBuf> empty())
 									.concatWith(Flux.just(Unpooled.copiedBuffer(new byte[0])))
-									.map(new GpfdistCodecFunction(response.alloc())).log("XXX")
+									.map(new GpfdistCodecFunction(response.alloc()))
 									);
 				})).block();
 
