@@ -43,11 +43,22 @@ public class LoadIT extends AbstractLoadTests {
 		template.execute(drop);
 		template.execute(create);
 
-//		Thread.sleep(60000);
+		List<String> data = new ArrayList<String>();
+		for (int i = 0; i < 100000; i++) {
+			data.add("DATA" + i + "\n");
+		}
+
+		broadcastData(data);
+
+		Thread.sleep(60000);
 		GreenplumLoad greenplumLoad = context.getBean(GreenplumLoad.class);
 		greenplumLoad.load();
-
 		List<Map<String, Object>> queryForList = template.queryForList("SELECT * from AbstractLoadTests;");
+		assertThat(queryForList, notNullValue());
+		assertThat(queryForList.size(), is(0));
+
+		greenplumLoad.load();
+		queryForList = template.queryForList("SELECT * from AbstractLoadTests;");
 		assertThat(queryForList, notNullValue());
 		assertThat(queryForList.size(), is(0));
 	}
