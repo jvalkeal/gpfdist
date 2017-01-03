@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,24 @@
 
 package org.springframework.cloud.stream.app.gpfdist.sink;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.time.Duration;
+import java.util.function.Function;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.reactivestreams.Processor;
-import org.reactivestreams.Publisher;
-import reactor.core.processor.RingBufferWorkProcessor;
-import reactor.fn.BiFunction;
-import reactor.fn.Function;
-import reactor.io.buffer.Buffer;
-import reactor.io.net.NetStreams;
-import reactor.io.net.ReactorChannelHandler;
-import reactor.io.net.Spec.HttpServerSpec;
-import reactor.io.net.http.HttpChannel;
-import reactor.io.net.http.HttpServer;
-import reactor.rx.Stream;
-import reactor.rx.Streams;
+import org.springframework.util.Assert;
 
-import java.util.concurrent.TimeUnit;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.nio.NioEventLoopGroup;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.WorkQueueProcessor;
+import reactor.ipc.netty.NettyContext;
+import reactor.ipc.netty.http.server.HttpServer;
 
 /**
  * Server implementation around reactor and netty providing endpoint
@@ -44,13 +45,14 @@ public class GpfdistServer {
 
 	private final static Log log = LogFactory.getLog(GpfdistServer.class);
 
-	private final Processor<Buffer, Buffer> processor;
+	private final Processor<ByteBuf, ByteBuf> processor;
+	private WorkQueueProcessor<ByteBuf> workProcessor;
 	private final int port;
 	private final int flushCount;
 	private final int flushTime;
 	private final int batchTimeout;
 	private final int batchCount;
-	private HttpServer<Buffer, Buffer> server;
+	private NettyContext server;
 	private int localPort = -1;
 
 	/**
@@ -63,8 +65,9 @@ public class GpfdistServer {
 	 * @param batchTimeout the batch timeout
 	 * @param batchCount the batch count
 	 */
-	public GpfdistServer(Processor<Buffer, Buffer> processor, int port, int flushCount, int flushTime,
+	public GpfdistServer(Processor<ByteBuf, ByteBuf> processor, int port, int flushCount, int flushTime,
 			int batchTimeout, int batchCount) {
+		Assert.notNull(processor, "Processor must be set");
 		this.processor = processor;
 		this.port = port;
 		this.flushCount = flushCount;
@@ -79,7 +82,8 @@ public class GpfdistServer {
 	 * @return the http server
 	 * @throws Exception the exception
 	 */
-	public synchronized HttpServer<Buffer, Buffer> start() throws Exception {
+	public synchronized NettyContext start() throws Exception {
+		workProcessor = WorkQueueProcessor.create("gpfdist-sink-worker", 8192, false);
 		if (server == null) {
 			server = createProtocolListener();
 		}
@@ -92,9 +96,13 @@ public class GpfdistServer {
 	 * @throws Exception the exception
 	 */
 	public synchronized void stop() throws Exception {
-		if (server != null) {
-			server.shutdown().awaitSuccess();
+		if (workProcessor != null) {
+			workProcessor.onComplete();
 		}
+		if (server != null) {
+			server.dispose();
+		}
+		workProcessor = null;
 		server = null;
 	}
 
@@ -107,62 +115,98 @@ public class GpfdistServer {
 		return localPort;
 	}
 
-	private HttpServer<Buffer, Buffer> createProtocolListener()
+
+	private NettyContext createProtocolListener()
 			throws Exception {
+		// Create a Flux from a processor which contains incoming data.
+		// Microbatch data as windows and flush it into downstream with timeout
+		// or when window gets full.
+		// Combine windowed data into one ByteBuf which will eventually end
+		// up into netty pipeline.
+		// workProcessor allows any number of netty channels to come and go
+		// to spread a load.
+		Flux<ByteBuf> stream = Flux.from(processor)
+				.window(flushCount, Duration.ofSeconds(flushTime))
+				.flatMap(s -> s.reduceWith(Unpooled::buffer, ByteBuf::writeBytes))
+				.subscribeWith(workProcessor);
 
-		final Stream<Buffer> stream = Streams
-		.wrap(processor)
-		.window(flushCount, flushTime, TimeUnit.SECONDS)
-		.flatMap(new Function<Stream<Buffer>, Publisher<Buffer>>() {
+		// Every new gpfdist client connection will have its own channel
+		// and subscription to upstream.
+		// Data is streamed over this channel until we have taken enough
+		// batches or we have a timeout for not enough data from upstream.
+		// We process raw data into a format needed for gpfdist and send
+		// end of data message.
 
-			@Override
-			public Publisher<Buffer> apply(Stream<Buffer> t) {
 
-				return t.reduce(new Buffer(), new BiFunction<Buffer, Buffer, Buffer>() {
 
-					@Override
-					public Buffer apply(Buffer prev, Buffer next) {
-						return prev.append(next);
-					}
-				});
-			}
-		})
-		.process(RingBufferWorkProcessor.<Buffer>create("gpfdist-sink-worker", 8192, false));
+		NettyContext httpServer = HttpServer
+				.create(opts -> opts.listen("0.0.0.0", port)
+						.eventLoopGroup(new NioEventLoopGroup(10)))
+				.newRouter(r -> r.get("/data", (request, response) -> {
+					response.chunkedTransfer(false);
+					return response
+							.addHeader("Content-type", "text/plain")
+							.addHeader("Expires", "0")
+							.addHeader("X-GPFDIST-VERSION", "Spring Dataflow")
+							.addHeader("X-GP-PROTO", "1")
+							.addHeader("Cache-Control", "no-cache")
+							.addHeader("Connection", "close")
+							.send(stream
+									.take(batchCount)
+									.timeout(Duration.ofSeconds(batchTimeout), Flux.<ByteBuf> empty())
+									.concatWith(Flux.just(Unpooled.copiedBuffer(new byte[0])))
+									.map(new GpfdistCodecFunction(response.alloc())));
+				})).block();
 
-		HttpServer<Buffer, Buffer> httpServer = NetStreams
-				.httpServer(new Function<HttpServerSpec<Buffer, Buffer>, HttpServerSpec<Buffer, Buffer>>() {
-
-					@Override
-					public HttpServerSpec<Buffer, Buffer> apply(HttpServerSpec<Buffer, Buffer> server) {
-						return server
-								.codec(new GpfdistCodec())
-								.listen(port);
-					}
-				});
-
-		httpServer.get("/data", new ReactorChannelHandler<Buffer, Buffer, HttpChannel<Buffer,Buffer>>() {
-
-			@Override
-			public Publisher<Void> apply(HttpChannel<Buffer, Buffer> request) {
-				request.responseHeaders().removeTransferEncodingChunked();
-				request.addResponseHeader("Content-type", "text/plain");
-				request.addResponseHeader("Expires", "0");
-				request.addResponseHeader("X-GPFDIST-VERSION", "Spring Dataflow");
-				request.addResponseHeader("X-GP-PROTO", "1");
-				request.addResponseHeader("Cache-Control", "no-cache");
-				request.addResponseHeader("Connection", "close");
-
-				return request.writeWith(stream
-						.take(batchCount)
-						.timeout(batchTimeout, TimeUnit.SECONDS, Streams.<Buffer>empty())
-						.concatWith(Streams.just(Buffer.wrap(new byte[0]))))
-						.capacity(1l);
-			}
-		});
-
-		httpServer.start().awaitSuccess();
-		log.info("Server running using address=[" + httpServer.getListenAddress() + "]");
-		localPort = httpServer.getListenAddress().getPort();
+		log.info("Server running using address=[" + httpServer.address() + "]");
+		localPort = httpServer.address().getPort();
 		return httpServer;
+	}
+
+	/**
+	 * Function which takes a given ByteBuf having a raw data to be sent
+	 * into a pipeline consumed by gpfdist nodes.
+	 *
+	 * Gpfdist protocol has a special format it understand and we're
+	 * only using part of it to send a data. In a nutshell first 5 bytes
+	 * are reserved where first is 'D' indicating we're sending data and
+	 * next 4 bytes tells how many bytes are expected.
+	 *
+	 * For example here we have data "1\n".
+	 *
+	 *          +-------------------------------------------------+
+	 *         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+	 *+--------+-------------------------------------------------+----------------+
+	 *|00000000| 44 00 00 00 02 31 0a                            |D....1.         |
+	 *+--------+-------------------------------------------------+----------------+
+	 *
+	 * When connection is open from a gpfdist node, there has to be special
+	 * end of transmission message which is same as above but we just tell
+	 * that we're sending zero bytes.
+	 *
+	 *         +-------------------------------------------------+
+	 *         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+	 *+--------+-------------------------------------------------+----------------+
+	 *|00000000| 44 00 00 00 00                                  |D....           |
+	 *+--------+-------------------------------------------------+----------------+
+	 *
+	 */
+	private static class GpfdistCodecFunction implements Function<ByteBuf, ByteBuf> {
+
+		final byte[] h1 = Character.toString('D').getBytes(Charset.forName("UTF-8"));
+		final ByteBufAllocator alloc;
+
+		public GpfdistCodecFunction(ByteBufAllocator alloc) {
+			this.alloc = alloc;
+		}
+
+		@Override
+		public ByteBuf apply(ByteBuf t) {
+			return alloc
+					.buffer()
+					.writeBytes(h1)
+					.writeBytes(ByteBuffer.allocate(4).putInt(t.readableBytes()).array())
+					.writeBytes(t);
+		}
 	}
 }

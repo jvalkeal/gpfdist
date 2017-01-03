@@ -34,6 +34,28 @@ import static org.junit.Assert.assertThat;
 public class LoadIT extends AbstractLoadTests {
 
 	@Test
+	public void testNoData() throws InterruptedException {
+		context.register(Config1.class, CommonConfig.class);
+		context.refresh();
+		JdbcTemplate template = context.getBean(JdbcTemplate.class);
+		String drop = "DROP TABLE IF EXISTS AbstractLoadTests;";
+		String create = "CREATE TABLE AbstractLoadTests (data text);";
+		template.execute(drop);
+		template.execute(create);
+
+		GreenplumLoad greenplumLoad = context.getBean(GreenplumLoad.class);
+		greenplumLoad.load();
+		List<Map<String, Object>> queryForList = template.queryForList("SELECT * from AbstractLoadTests;");
+		assertThat(queryForList, notNullValue());
+		assertThat(queryForList.size(), is(0));
+
+		greenplumLoad.load();
+		queryForList = template.queryForList("SELECT * from AbstractLoadTests;");
+		assertThat(queryForList, notNullValue());
+		assertThat(queryForList.size(), is(0));
+	}
+
+	@Test
 	public void testInsert() {
 		context.register(Config1.class, CommonConfig.class);
 		context.refresh();
