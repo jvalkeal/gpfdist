@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 the original author or authors.
+ * Copyright 2016-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.WorkQueueProcessor;
 import reactor.ipc.netty.NettyContext;
-import reactor.ipc.netty.NettyPipeline;
 import reactor.ipc.netty.http.server.HttpServer;
 
 /**
@@ -152,14 +151,11 @@ public class GpfdistServer {
 							.addHeader("X-GP-PROTO", "1")
 							.addHeader("Cache-Control", "no-cache")
 							.addHeader("Connection", "close")
-//							.options(NettyPipeline.SendOptions::flushOnEach)
-							.sendHeaders()
 							.send(stream
 									.take(batchCount)
 									.timeout(Duration.ofSeconds(batchTimeout), Flux.<ByteBuf> empty())
 									.concatWith(Flux.just(Unpooled.copiedBuffer(new byte[0])))
-									.map(new GpfdistCodecFunction(response.alloc()))
-									);
+									.map(new GpfdistCodecFunction(response.alloc())));
 				})).block();
 
 		log.info("Server running using address=[" + httpServer.address() + "]");
@@ -206,22 +202,10 @@ public class GpfdistServer {
 
 		@Override
 		public ByteBuf apply(ByteBuf t) {
-//			ByteBuf writeBytes = alloc
-//					.buffer()
-//					.writeBytes(h1)
-//					.writeBytes(ByteBuffer
-//							.allocate(4)
-//							.putInt(t.readableBytes()).array())
-//					.writeBytes(t);
-//			log.info("XXX " + writeBytes.toString(Charset.forName("UTF-8")));
-//			return writeBytes;
-
 			return alloc
 					.buffer()
 					.writeBytes(h1)
-					.writeBytes(ByteBuffer
-							.allocate(4)
-							.putInt(t.readableBytes()).array())
+					.writeBytes(ByteBuffer.allocate(4).putInt(t.readableBytes()).array())
 					.writeBytes(t);
 		}
 	}

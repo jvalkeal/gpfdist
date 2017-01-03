@@ -64,8 +64,7 @@ public abstract class AbstractLoadTests {
 		public ReadableTableFactoryBean greenplumReadableTable() {
 			ReadableTableFactoryBean factory = new ReadableTableFactoryBean();
 			DefaultHostInfoDiscovery discovery = new DefaultHostInfoDiscovery();
-//			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri(discovery.getHostInfo().getAddress(), 8080)));
-			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri("172.16.101.1", 8080)));
+			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri(discovery.getHostInfo().getAddress(), 8080)));
 			factory.setFormat(Format.TEXT);
 			return factory;
 		}
