@@ -33,6 +33,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.WorkQueueProcessor;
 import reactor.ipc.netty.NettyContext;
+import reactor.ipc.netty.NettyPipeline;
 import reactor.ipc.netty.http.server.HttpServer;
 
 /**
@@ -115,9 +116,10 @@ public class GpfdistServer {
 		return localPort;
 	}
 
-
 	private NettyContext createProtocolListener()
 			throws Exception {
+		log.info("Creating protocol listener [flushCount=" + flushCount + ", flushTime=" + flushTime + ", batchTimeout=" + batchTimeout
+				+ ", batchCount=" + batchCount + "]");
 		// Create a Flux from a processor which contains incoming data.
 		// Microbatch data as windows and flush it into downstream with timeout
 		// or when window gets full.
@@ -136,9 +138,6 @@ public class GpfdistServer {
 		// batches or we have a timeout for not enough data from upstream.
 		// We process raw data into a format needed for gpfdist and send
 		// end of data message.
-
-
-
 		NettyContext httpServer = HttpServer
 				.create(opts -> opts.listen("0.0.0.0", port)
 						.eventLoopGroup(new NioEventLoopGroup(10)))
@@ -151,6 +150,7 @@ public class GpfdistServer {
 							.addHeader("X-GP-PROTO", "1")
 							.addHeader("Cache-Control", "no-cache")
 							.addHeader("Connection", "close")
+							.options(NettyPipeline.SendOptions::flushOnEach)
 							.send(stream
 									.take(batchCount)
 									.timeout(Duration.ofSeconds(batchTimeout), Flux.<ByteBuf> empty())

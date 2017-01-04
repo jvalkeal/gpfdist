@@ -62,6 +62,8 @@ public abstract class AbstractLoadTests {
 			ReadableTableFactoryBean factory = new ReadableTableFactoryBean();
 			DefaultHostInfoDiscovery discovery = new DefaultHostInfoDiscovery();
 			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri(discovery.getHostInfo().getAddress(), 8080)));
+//			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri("172.16.101.1", 8080)));
+//			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri("192.168.1.96", 8080)));
 			factory.setFormat(Format.TEXT);
 			return factory;
 		}
