@@ -131,6 +131,7 @@ public class JdbcCommands {
 			if (log.isDebugEnabled()) {
 				log.debug("Executing run: " + runSql);
 			}
+			log.info("Executing run: " + runSql);
 			jdbcTemplate.execute(runSql);
 		}
 		catch (DataAccessException e) {

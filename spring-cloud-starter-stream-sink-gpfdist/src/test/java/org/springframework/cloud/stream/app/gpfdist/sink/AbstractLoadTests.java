@@ -25,9 +25,10 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.hadoop.util.net.DefaultHostInfoDiscovery;
 import org.springframework.jdbc.core.JdbcTemplate;
-import reactor.Environment;
-import reactor.core.processor.RingBufferProcessor;
-import reactor.io.buffer.Buffer;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import reactor.core.publisher.WorkQueueProcessor;
 
 import java.util.Arrays;
 import java.util.List;
@@ -42,7 +43,7 @@ public abstract class AbstractLoadTests {
 
 	protected AnnotationConfigApplicationContext context;
 
-	protected Processor<Buffer, Buffer> processor;
+	private Processor<ByteBuf, ByteBuf> processor;
 
 	private GpfdistServer server;
 
@@ -61,6 +62,8 @@ public abstract class AbstractLoadTests {
 			ReadableTableFactoryBean factory = new ReadableTableFactoryBean();
 			DefaultHostInfoDiscovery discovery = new DefaultHostInfoDiscovery();
 			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri(discovery.getHostInfo().getAddress(), 8080)));
+//			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri("172.16.101.1", 8080)));
+//			factory.setLocations(Arrays.asList(NetworkUtils.getGPFDistUri("192.168.1.96", 8080)));
 			factory.setFormat(Format.TEXT);
 			return factory;
 		}
@@ -84,14 +87,13 @@ public abstract class AbstractLoadTests {
 
 	protected void broadcastData(List<String> data) {
 		for (String d : data) {
-			processor.onNext(Buffer.wrap(d));
+			processor.onNext(Unpooled.copiedBuffer(d.getBytes()));
 		}
 	}
 
 	@Before
 	public void setup() throws Exception {
-		Environment.initializeIfEmpty().assignErrorJournal();
-		processor = RingBufferProcessor.create(false);
+		processor = WorkQueueProcessor.create(false);
 		server = new GpfdistServer(processor, 8080, 1, 1, 1, 10);
 		server.start();
 		context = new AnnotationConfigApplicationContext();

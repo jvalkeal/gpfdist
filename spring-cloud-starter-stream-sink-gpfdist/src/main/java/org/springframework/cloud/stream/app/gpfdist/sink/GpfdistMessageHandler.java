@@ -17,6 +17,13 @@
 package org.springframework.cloud.stream.app.gpfdist.sink;
 
 import com.codahale.metrics.Meter;
+
+import reactor.core.publisher.WorkQueueProcessor;
+//import reactor.ipc.buffer.Buffer;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.reactivestreams.Processor;
@@ -29,9 +36,9 @@ import org.springframework.messaging.MessageHandlingException;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.util.StringUtils;
 import org.springframework.util.concurrent.SettableListenableFuture;
-import reactor.Environment;
-import reactor.core.processor.RingBufferProcessor;
-import reactor.io.buffer.Buffer;
+//import reactor.Environment;
+//import reactor.core.processor.RingBufferProcessor;
+//import reactor.io.buffer.Buffer;
 
 import java.util.Date;
 import java.util.concurrent.FutureTask;
@@ -54,7 +61,7 @@ public class GpfdistMessageHandler extends AbstractGpfdistMessageHandler {
 	private final int batchPeriod;
 	private final String delimiter;
 	private GreenplumLoad greenplumLoad;
-	private Processor<Buffer, Buffer> processor;
+	private Processor<ByteBuf, ByteBuf> processor;
 	private GpfdistServer gpfdistServer;
 	private TaskScheduler sqlTaskScheduler;
 	private final TaskFuture taskFuture = new TaskFuture();
@@ -94,9 +101,9 @@ public class GpfdistMessageHandler extends AbstractGpfdistMessageHandler {
 		if (payload instanceof String) {
 			String data = (String)payload;
 			if (delimiter != null) {
-				processor.onNext(Buffer.wrap(data+delimiter));
+				processor.onNext(Unpooled.copiedBuffer((data+delimiter).getBytes()));
 			} else {
-				processor.onNext(Buffer.wrap(data));
+				processor.onNext(Unpooled.copiedBuffer(data.getBytes()));
 			}
 			if (meter != null) {
 				if ((meterCount++ % rateInterval) == 0) {
@@ -112,14 +119,15 @@ public class GpfdistMessageHandler extends AbstractGpfdistMessageHandler {
 	@Override
 	protected void onInit() throws Exception {
 		super.onInit();
-		Environment.initializeIfEmpty().assignErrorJournal();
-		processor = RingBufferProcessor.create(false);
+		processor = WorkQueueProcessor.create(false);
 	}
 
 	@Override
 	protected void doStart() {
 		try {
 			log.info("Creating gpfdist protocol listener on port=" + port);
+			log.info("Creating GpfdistServer flushCount=" + flushCount + ", flushTime=" + flushTime + ", batchTimeout=" + batchTimeout
+					+ ", batchCount=" + batchCount);
 			gpfdistServer = new GpfdistServer(processor, port, flushCount, flushTime, batchTimeout, batchCount);
 			gpfdistServer.start();
 			log.info("gpfdist protocol listener running on port=" + gpfdistServer.getLocalPort());
